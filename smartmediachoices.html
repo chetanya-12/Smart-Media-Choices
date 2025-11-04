@@ -1,0 +1,1468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Media Choices - Gamified Tracker</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Chart.js for Graphing -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f9ff; /* Very light blue background */
+        }
+        /* Custom styles for the progress gauge animation */
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.7s ease-out;
+        }
+    </style>
+    <!-- Load Firebase Modules --><script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        setLogLevel('Debug');
+
+        // --- CONSTANTS ---
+        const COLLECTION_NAME = 'screenTimeTracker';
+        const DOCUMENT_ID = 'data';
+        const TIP_REWARD = 50; 
+        const STREAK_MAINTAINED_REWARD = 0; 
+
+        const INITIAL_APPS_LIST = [
+            { id: 1, name: 'Instagram', limit: 30, timeSpent: 0, color: 'bg-lime-500', group: 'social' },
+            { id: 2, name: 'X / Twitter', limit: 30, timeSpent: 0, color: 'bg-blue-400', group: 'social' },
+            { id: 3, name: 'Facebook', limit: 30, timeSpent: 0, color: 'bg-orange-400', group: 'social' },
+            { id: 4, name: 'YouTube', limit: 30, timeSpent: 0, color: 'bg-orange-500', group: 'social' },
+        ];
+        
+        const STORE_ITEMS = [ // New: Define store items
+            { id: 'theme-teal', name: 'Teal Theme Unlock', cost: 1000, description: 'Change the primary app color to Teal (Future feature).', type: 'customization' },
+            { id: 'limit-extension', name: 'Extra 10 Minutes Limit', cost: 500, description: 'Permanently increases the daily limit for all tracked apps by 10 minutes.', type: 'utility' }
+        ];
+
+        const DAILY_TIPS = [
+            "**Unfollow accounts** that drain your energy or promote unrealistic standards. Curate a feed that inspires you.",
+            "Practice the **'20-20-20 Rule'**: Every 20 minutes, look at something 20 feet away for at least 20 seconds to reduce eye strain.",
+            "Set a **'digital sunset'** time 30 minutes before bed. Put your devices away to improve sleep quality.",
+            "Use your social media limits to prioritize: which platforms truly connect you, and which are just habits?",
+            "Identify one activity you can replace screen time with today—reading, walking, or talking to a friend face-to-face.",
+            "Turn off notifications for non-essential apps for a few hours. **Reclaim your focus and concentration.**",
+            "Mindful Check-In: Before opening an app, ask yourself: 'Why am I opening this right now? What is my goal?'",
+            "Change your phone screen to **grayscale** for a day to reduce the visual pull of apps.",
+            "Schedule a **'digital detox'** hour where all screens are completely off limits."
+        ];
+        
+        const ACHIEVEMENT_BADGES = {
+            'streak_5_days': {
+                name: '5-Day Streak Master',
+                description: 'Maintain a 5-day challenge streak.',
+                icon: '&#128293;', // Fire
+                criteria: (state) => state.currentStreak >= 5
+            },
+            'gem_hoarder_1k': {
+                name: 'Gem Collector I',
+                description: 'Accumulate 1,000 total gems (spent or not).',
+                icon: '&#128142;', // Gem
+                criteria: (state) => state.totalGemsAccumulated >= 1000 
+            },
+            'compliance_score_90': {
+                name: 'High Balance Day',
+                description: 'Achieve a Media Balance Score of 90 or more on a single day.',
+                icon: '&#128077;', // Thumbs up
+                criteria: (state) => state.mediaBalanceScore >= 90 
+            }
+        };
+
+        // NEW: Define themes and their associated challenge pools for monthly rotation
+        const MONTHLY_CHALLENGE_THEMES = [
+            {
+                name: "Low Screen Time Focus",
+                icon: "&#9203;", // Stopwatch
+                color: "text-red-500",
+                challenges: [
+                    // Reward 40 Gems (Hard)
+                    { text: "Ultra Focus: Limit your **Total Social Media** time today to **60 minutes or less**.", reward: 40 },
+                    // Reward 30 Gems (Medium)
+                    { text: "Mindful Day: Limit your **Total Social Media** time today to **90 minutes or less**.", reward: 30 },
+                    // Reward 20 Gems (Easy)
+                    { text: "Quick Win: Track less than **30 minutes** on **YouTube** today.", reward: 20 },
+                ]
+            },
+            {
+                name: "Platform Balance Focus",
+                icon: "&#9904;", // Scales
+                color: "text-green-500",
+                challenges: [
+                    // Reward 40 Gems (Hard)
+                    { text: "Zero Tolerance: Track **less than 5 minutes** on both **X / Twitter and Facebook** combined.", reward: 40 },
+                    // Reward 30 Gems (Medium)
+                    { text: "Balanced Diet: Use **Instagram** and **YouTube** time equally (within 5 minutes difference).", reward: 30 },
+                    // Reward 20 Gems (Easy)
+                    { text: "Prioritize: Keep your usage of **Instagram** below **20 minutes**.", reward: 20 },
+                ]
+            },
+            {
+                name: "Deep Focus Day",
+                icon: "&#128161;", // Lightbulb
+                color: "text-purple-500",
+                challenges: [
+                    // Reward 40 Gems (Hard)
+                    { text: "Digital Detox: Track **less than 10 minutes** across **all** social media apps today.", reward: 40 },
+                    // Reward 30 Gems (Medium)
+                    { text: "Concentration Goal: Track at least **90 minutes** of social media usage today (to ensure tracking is active).", reward: 30 },
+                    // Reward 20 Gems (Easy)
+                    { text: "Social Break: Take a complete break from **Facebook** today (0 minutes tracked).", reward: 20 },
+                ]
+            }
+        ];
+
+        
+        // --- GLOBAL STATE ---
+        let app;
+        let db;
+        let auth;
+        let userId = null;
+        let trackingInterval = null;
+        let isAuthReady = false;
+        
+        let globalState = {
+            apps: INITIAL_APPS_LIST,
+            gems: 0,
+            totalGemsAccumulated: 0, // NEW: Track all-time earned gems
+            currentStreak: 0, 
+            lastStreakUpdateDate: null, 
+            challengeState: {
+                dailyChallengeSeed: 0,
+                lastCompletedDate: null, 
+                lastTipCompletedDate: null 
+            },
+            monthlyLog: {}, // { "YYYY-MM-DD": totalMinutesSpent }
+            purchasedItems: {}, 
+            achievements: {} // NEW: { 'badge_id': timestamp }
+        };
+
+        // --- UTILITY FUNCTIONS ---
+
+        /** Converts minutes to HH:MM:SS format string. */
+        function formatTime(totalMinutes) {
+            const totalSeconds = Math.round(totalMinutes * 60);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            return [
+                hours.toString().padStart(2, '0'),
+                minutes.toString().padStart(2, '0'),
+                seconds.toString().padStart(2, '0')
+            ].join(':');
+        }
+
+        /** Calculates the percentage of the limit used. */
+        function getProgress(timeSpent, limit) {
+            if (limit === 0) return 0;
+            return Math.min((timeSpent / limit) * 100, 100);
+        }
+        
+        /** Gets the Firestore document path for the user's data. */
+        function getDocRef(db, appId, uid) {
+            return doc(db, `artifacts/${appId}/users/${uid}/${COLLECTION_NAME}/${DOCUMENT_ID}`);
+        }
+
+        /** Gets the current UTC date string in YYYY-MM-DD format. */
+        function getTodayDateString() {
+            const today = new Date();
+            // Use local date for tracking consistency within a user's day
+            const year = today.getFullYear();
+            const month = (today.getMonth() + 1).toString().padStart(2, '0');
+            const day = today.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`; 
+        }
+        
+        /** Gets yesterday's UTC date string in YYYY-MM-DD format. */
+        function getYesterdayDateString() {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const year = yesterday.getFullYear();
+            const month = (yesterday.getMonth() + 1).toString().padStart(2, '0');
+            const day = yesterday.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        /** Hides a given modal. */
+        window.dismissModal = function(modalId) {
+            document.getElementById(modalId)?.classList.add('hidden');
+        };
+
+        // --- WELCOME MODAL LOGIC (Using localStorage for simple UI state) ---
+
+        /** Hides the welcome modal and sets a flag in local storage. */
+        window.dismissWelcome = function() {
+            const modal = document.getElementById('welcomeModal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+            localStorage.setItem('SMC_WELCOME_SEEN', 'true');
+        };
+
+        /** Shows the welcome modal if the user hasn't seen it before. */
+        function showWelcomeModalIfNeeded() {
+            const welcomeSeen = localStorage.getItem('SMC_WELCOME_SEEN');
+            const modal = document.getElementById('welcomeModal');
+            if (welcomeSeen !== 'true' && modal) {
+                modal.classList.remove('hidden');
+            }
+        }
+
+        // --- STREAK LOGIC ---
+
+        /** Checks if both challenge and tip are complete today and updates streak if needed. */
+        async function checkAndHandleStreak() {
+            if (!db || !userId) return;
+
+            const todayStr = getTodayDateString();
+            
+            // 1. Check if both prerequisites are met today
+            const challengeCompletedToday = globalState.challengeState.lastCompletedDate === todayStr;
+            const tipCompletedToday = globalState.challengeState.lastTipCompletedDate === todayStr;
+            
+            if (!challengeCompletedToday || !tipCompletedToday) {
+                return;
+            }
+            
+            // 2. Check if streak was already updated today
+            if (globalState.lastStreakUpdateDate === todayStr) {
+                return;
+            }
+
+            let newStreak = 0;
+            const lastUpdateDate = globalState.lastStreakUpdateDate;
+            const yesterdayStr = getYesterdayDateString();
+
+            if (lastUpdateDate === yesterdayStr) {
+                // Maintained: last update was yesterday
+                newStreak = globalState.currentStreak + 1;
+            } else if (!lastUpdateDate || lastUpdateDate < yesterdayStr) {
+                // New streak or broken streak: last update was before yesterday or non-existent
+                newStreak = 1;
+            } else {
+                return; 
+            }
+            
+            // 3. Update global state and persist
+            globalState.currentStreak = newStreak;
+            globalState.lastStreakUpdateDate = todayStr;
+            globalState.gems += STREAK_MAINTAINED_REWARD; 
+
+            const docRef = getDocRef(db, window.appId, userId);
+            try {
+                await setDoc(docRef, {
+                    currentStreak: globalState.currentStreak,
+                    lastStreakUpdateDate: globalState.lastStreakUpdateDate,
+                    gems: globalState.gems 
+                }, { merge: true });
+                console.log(`Streak updated to ${globalState.currentStreak} and saved.`);
+                await checkAndAwardAchievements(); // Check achievements after streak update
+                renderApp(); 
+            } catch (error) {
+                console.error("Error saving streak data:", error);
+                // Revert state if save fails
+                globalState.currentStreak = newStreak === 1 ? 0 : newStreak - 1;
+                globalState.lastStreakUpdateDate = lastUpdateDate;
+                globalState.gems -= STREAK_MAINTAINED_REWARD;
+            }
+        }
+
+        // --- CHALLENGE / TIP LOGIC ---
+
+        /** Generates a daily tip based on a deterministic seed. */
+        function getDailyTip(seed) {
+            const index = seed % DAILY_TIPS.length; 
+            return DAILY_TIPS[index];
+        }
+
+
+        /** * Retrieves or resets the daily challenge and tip state based on the date.
+         * The challenge pool rotates monthly based on the MONTHLY_CHALLENGE_THEMES.
+         */
+        function getDailyChallenge() {
+            const today = new Date();
+            const todayStr = getTodayDateString();
+            
+            // Use YYYY + MM + DD for the daily seed
+            const dailySeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate(); 
+            
+            // Determine Monthly Theme (changes every month)
+            const monthIndex = today.getMonth(); // 0 for January, 11 for December
+            const themeIndex = monthIndex % MONTHLY_CHALLENGE_THEMES.length;
+            const monthlyTheme = MONTHLY_CHALLENGE_THEMES[themeIndex];
+
+            // Use the daily seed to pick a challenge from the monthly theme's pool
+            const challengePool = monthlyTheme.challenges;
+            const challengeIndex = dailySeed % challengePool.length;
+            const selectedChallenge = challengePool[challengeIndex];
+            
+            // Check if it's a new day and update challenge state if necessary
+            if (globalState.challengeState.dailyChallengeSeed !== dailySeed) {
+                // New day, reset the challenge state
+                globalState.challengeState.dailyChallengeSeed = dailySeed;
+                globalState.challengeState.lastCompletedDate = null; 
+                saveTimeData(); // Persist the new daily seed
+            }
+
+            const isCompleted = globalState.challengeState.lastCompletedDate === todayStr;
+
+            return {
+                themeName: monthlyTheme.name,
+                themeIcon: monthlyTheme.icon,
+                themeColor: monthlyTheme.color,
+                text: selectedChallenge.text,
+                isCompleted: isCompleted,
+                reward: selectedChallenge.reward, // Use the challenge-specific reward
+            };
+        }
+
+
+        /** Marks the challenge as complete and awards gems. */
+        window.completeDailyChallenge = async function() {
+            if (!db || !userId) {
+                console.error("Not authenticated or DB not ready.");
+                return;
+            }
+
+            const todayStr = getTodayDateString();
+            const challenge = getDailyChallenge();
+            const reward = challenge.reward; // Get the dynamic reward
+            
+            if (globalState.challengeState.lastCompletedDate === todayStr) {
+                console.warn("Challenge already completed today.");
+                return;
+            }
+
+            // 1. Update state
+            globalState.gems += reward;
+            globalState.totalGemsAccumulated += reward; // NEW: Update total accumulated gems
+            globalState.challengeState.lastCompletedDate = todayStr;
+
+            const docRef = getDocRef(db, window.appId, userId);
+            try {
+                await setDoc(docRef, {
+                    gems: globalState.gems,
+                    totalGemsAccumulated: globalState.totalGemsAccumulated, // NEW: Save accumulated gems
+                    challengeState: globalState.challengeState
+                }, { merge: true });
+                console.log(`Challenge completed! Gained ${reward} gems.`);
+                
+                await checkAndHandleStreak(); 
+                await checkAndAwardAchievements(); // Check achievements after earning gems/updating streak
+                renderApp(); 
+            } catch (error) {
+                console.error("Error completing challenge:", error);
+                globalState.gems -= reward;
+                globalState.totalGemsAccumulated -= reward; // Revert accumulated gems
+                globalState.challengeState.lastCompletedDate = null;
+            }
+        }
+
+        /** Marks the wellness tip reward as complete and awards gems. */
+        window.completeWellnessTip = async function() {
+            if (!db || !userId) {
+                console.error("Not authenticated or DB not ready.");
+                return;
+            }
+
+            const todayStr = getTodayDateString();
+            
+            if (globalState.challengeState.lastTipCompletedDate === todayStr) {
+                console.warn("Wellness Tip reward already claimed today.");
+                return;
+            }
+
+            // 1. Update state
+            globalState.gems += TIP_REWARD;
+            globalState.totalGemsAccumulated += TIP_REWARD; // NEW: Update total accumulated gems
+            globalState.challengeState.lastTipCompletedDate = todayStr;
+
+            const docRef = getDocRef(db, window.appId, userId);
+            try {
+                await setDoc(docRef, {
+                    gems: globalState.gems,
+                    totalGemsAccumulated: globalState.totalGemsAccumulated, // NEW: Save accumulated gems
+                    challengeState: globalState.challengeState
+                }, { merge: true });
+                console.log(`Wellness Tip reward claimed! Gained ${TIP_REWARD} gems.`);
+                
+                await checkAndHandleStreak(); 
+                await checkAndAwardAchievements(); // Check achievements after earning gems
+                renderApp(); 
+            } catch (error) {
+                console.error("Error claiming Wellness Tip reward:", error);
+                globalState.gems -= TIP_REWARD;
+                globalState.totalGemsAccumulated -= TIP_REWARD; // Revert accumulated gems
+                globalState.challengeState.lastTipCompletedDate = null;
+            }
+        }
+        
+        // --- ACHIEVEMENT LOGIC ---
+
+        /** Checks current state against badge criteria and awards new achievements. */
+        async function checkAndAwardAchievements() {
+            if (!db || !userId) return;
+
+            const todayStr = getTodayDateString();
+            
+            // Calculate media balance score needed for the 'compliance_score_90' check
+            const totalSpent = globalState.apps.reduce((sum, app) => sum + app.timeSpent, 0);
+            const totalLimit = globalState.apps.reduce((sum, app) => sum + app.limit, 0); 
+            const isChallengeCompleted = globalState.challengeState.lastCompletedDate === todayStr;
+            const isTipCompleted = globalState.challengeState.lastTipCompletedDate === todayStr; 
+            
+            let complianceScore = 0; 
+            if (totalLimit > 0) {
+                if (totalSpent <= totalLimit) {
+                    complianceScore = 50;
+                } else {
+                    const overshoot = totalSpent - totalLimit;
+                    const penaltyRatio = Math.min(overshoot / totalLimit, 1.0); 
+                    complianceScore = Math.max(0, 50 - (penaltyRatio * 50));
+                }
+            }
+            const proactivenessScore = (isChallengeCompleted ? 25 : 0) + (isTipCompleted ? 25 : 0);
+            const mediaBalanceScore = Math.round(complianceScore + proactivenessScore); 
+
+            // Prepare state object for criteria checks
+            const stateForCriteria = {
+                currentStreak: globalState.currentStreak,
+                totalGemsAccumulated: globalState.totalGemsAccumulated,
+                mediaBalanceScore: mediaBalanceScore 
+            };
+
+            let changes = false;
+            let newAchievements = [];
+
+            for (const id in ACHIEVEMENT_BADGES) {
+                if (!globalState.achievements[id]) {
+                    const badge = ACHIEVEMENT_BADGES[id];
+                    // Check criteria
+                    if (badge.criteria(stateForCriteria)) {
+                        globalState.achievements[id] = todayStr; // Store date of achievement
+                        newAchievements.push(badge.name);
+                        changes = true;
+                    }
+                }
+            }
+
+            if (changes) {
+                const docRef = getDocRef(db, window.appId, userId);
+                try {
+                    await setDoc(docRef, {
+                        achievements: globalState.achievements 
+                    }, { merge: true });
+                    console.log("New achievements unlocked:", newAchievements.join(', '));
+                    
+                    // Show a success message
+                    window.showAchievementModal(newAchievements);
+                    renderApp();
+                } catch (error) {
+                    console.error("Error saving achievements:", error);
+                }
+            }
+        }
+
+        /** Shows a custom modal congratulating the user on new achievements. */
+        window.showAchievementModal = function(achievementNames) {
+            const modal = document.getElementById('achievementModal');
+            if (!modal) return;
+            
+            const achievementsList = achievementNames.map(name => 
+                `<li class="text-xl font-semibold text-lime-600 flex items-center mb-1">
+                    <span class="text-2xl mr-2">${ACHIEVEMENT_BADGES[Object.keys(ACHIEVEMENT_BADGES).find(key => ACHIEVEMENT_BADGES[key].name === name)].icon}</span>
+                    ${name}
+                </li>`
+            ).join('');
+
+            const content = document.getElementById('achievementModalContent');
+            content.innerHTML = `
+                <h2 class="text-3xl font-extrabold text-lime-700 mb-4 border-b pb-2">Achievement Unlocked!</h2>
+                <p class="text-gray-700 mb-4 text-lg">You've hit a new milestone in your journey to digital balance. Keep up the great work!</p>
+                <ul class="list-none p-0 space-y-2 mb-6">
+                    ${achievementsList}
+                </ul>
+                <button onclick="dismissModal('achievementModal')" class="w-full py-3 bg-lime-500 text-white font-bold rounded-xl hover:bg-lime-600 transition duration-150">
+                    Awesome!
+                </button>
+            `;
+            modal.classList.remove('hidden');
+        };
+
+        /** Shows the modal listing all achievements. */
+        window.showAllAchievements = function() {
+            const modal = document.getElementById('allAchievementsModal');
+            if (!modal) return;
+
+            const content = document.getElementById('allAchievementsModalContent');
+
+            const achievementListHTML = Object.entries(ACHIEVEMENT_BADGES).map(([id, badge]) => {
+                const isUnlocked = globalState.achievements[id];
+                const dateUnlocked = isUnlocked ? new Date(globalState.achievements[id]).toLocaleDateString() : '—';
+                const statusClass = isUnlocked ? 'bg-lime-100 border-lime-400' : 'bg-gray-100 border-gray-300 opacity-60';
+                const iconColor = isUnlocked ? 'text-lime-600' : 'text-gray-500';
+
+                return `
+                    <div class="p-4 rounded-xl border-2 ${statusClass} flex items-center justify-between shadow-sm">
+                        <div class="flex items-center">
+                             <span class="text-4xl mr-3 ${iconColor}">${badge.icon}</span>
+                            <div>
+                                <h4 class="text-lg font-bold text-gray-800">${badge.name}</h4>
+                                <p class="text-sm text-gray-600">${badge.description}</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-xs uppercase text-gray-500">Unlocked</p>
+                            <p class="text-base font-semibold text-gray-700">${dateUnlocked}</p>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            content.innerHTML = `
+                <h2 class="text-3xl font-extrabold text-sky-700 mb-4 border-b pb-2">Your Achievements (${Object.keys(globalState.achievements).length} Unlocked)</h2>
+                <div class="space-y-4">
+                    ${achievementListHTML}
+                </div>
+                <button onclick="dismissModal('allAchievementsModal')" class="mt-6 w-full py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-bold">Close</button>
+            `;
+
+            modal.classList.remove('hidden');
+        }
+
+        
+        // --- LIMIT CUSTOMIZATION LOGIC ---
+        
+        /** Shows the Limit Customization Modal. */
+        window.showLimitModal = function() {
+            const modal = document.getElementById('limitModal');
+            if (modal) {
+                const content = document.getElementById('limitModalContent');
+                content.innerHTML = `
+                    <h2 class="text-3xl font-bold text-gray-800 mb-4 border-b pb-2">Customize Daily Limits (Minutes)</h2>
+                    ${globalState.apps.map(app => `
+                        <div class="flex items-center justify-between py-3 border-b border-gray-100">
+                            <label for="limit-${app.id}" class="font-medium text-lg text-gray-700">${app.name}</label>
+                            <div class="flex items-center">
+                                <input type="number" id="limit-${app.id}" value="${app.limit}" min="0" max="180" 
+                                       class="w-20 p-2 border border-gray-300 rounded-lg text-center font-mono text-gray-800 focus:ring-blue-500 focus:border-blue-500">
+                                <span class="ml-2 text-gray-500">min</span>
+                            </div>
+                        </div>
+                    `).join('')}
+                    <div class="mt-6 flex justify-end space-x-3">
+                        <button onclick="dismissModal('limitModal')" class="py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">Cancel</button>
+                        <button onclick="saveLimitChanges()" class="py-2 px-4 bg-lime-500 text-white rounded-lg font-bold hover:bg-lime-600">Save Changes</button>
+                    </div>
+                `;
+                modal.classList.remove('hidden');
+            }
+        };
+    
+        /** Saves the new limits to global state and Firestore. */
+        window.saveLimitChanges = async function() {
+            if (!db || !userId) return;
+    
+            let changes = false;
+            const newAppsState = globalState.apps.map(app => {
+                const input = document.getElementById(`limit-${app.id}`);
+                if (input) {
+                    const newLimit = parseInt(input.value, 10);
+                    if (!isNaN(newLimit) && newLimit >= 0 && newLimit !== app.limit) {
+                        app.limit = newLimit;
+                        changes = true;
+                    }
+                }
+                return app;
+            });
+    
+            if (changes) {
+                globalState.apps = newAppsState;
+                await saveTimeData(); 
+            } 
+            dismissModal('limitModal');
+        };
+
+        // --- GEM STORE LOGIC ---
+
+        /** Shows the Gem Store Modal. */
+        window.showGemStore = function() {
+            const modal = document.getElementById('storeModal');
+            if (modal) {
+                const content = document.getElementById('storeModalContent');
+                content.innerHTML = `
+                    <h2 class="text-3xl font-bold text-sky-600 mb-4 border-b pb-2">The Gem Store</h2>
+                    <p class="text-xl font-extrabold mb-4 text-gray-700">Your Gems: <span class="text-sky-500">${globalState.gems}</span></p>
+                    <div class="space-y-4">
+                        ${STORE_ITEMS.map(item => {
+                            const isPurchased = globalState.purchasedItems[item.id];
+                            const canAfford = globalState.gems >= item.cost;
+                            const buttonColor = isPurchased ? 'bg-gray-500' : (canAfford ? 'bg-sky-500 hover:bg-sky-600' : 'bg-red-400 cursor-not-allowed');
+                            const buttonText = isPurchased ? 'UNLOCKED' : (canAfford ? `BUY (${item.cost} Gems)` : `NEED ${item.cost - globalState.gems}`);
+
+                            return `
+                                <div class="p-4 bg-white border rounded-xl shadow-sm flex flex-col sm:flex-row justify-between items-center space-y-2 sm:space-y-0 transition duration-150 ${isPurchased ? 'border-sky-300' : 'border-gray-200'}">
+                                    <div class="text-center sm:text-left">
+                                        <h4 class="text-lg font-bold text-gray-800">${item.name}</h4>
+                                        <p class="text-sm text-gray-500">${item.description}</p>
+                                    </div>
+                                    <button onclick="purchaseItem('${item.id}', ${item.cost}, '${item.type}')" 
+                                            ${isPurchased || !canAfford ? 'disabled' : ''}
+                                            class="py-2 px-4 rounded-lg font-bold text-sm text-white transform active:scale-95 transition duration-150 ${buttonColor} w-full sm:w-auto">
+                                        ${buttonText}
+                                    </button>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                    <button onclick="dismissModal('storeModal')" class="mt-6 w-full py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-bold">Close Store</button>
+                `;
+                modal.classList.remove('hidden');
+            }
+        };
+
+        /** Handles item purchase logic, updates state, and persists. */
+        window.purchaseItem = async function(itemId, cost, type) {
+            if (!db || !userId || globalState.gems < cost || globalState.purchasedItems[itemId]) {
+                return;
+            }
+
+            // 1. Apply utility effects instantly
+            if (type === 'utility' && itemId === 'limit-extension') {
+                 globalState.apps = globalState.apps.map(app => ({
+                    ...app,
+                    limit: app.limit + 10 // Permanent 10 minute increase
+                }));
+            }
+            
+            // 2. Update state
+            globalState.gems -= cost;
+            globalState.purchasedItems[itemId] = true;
+            
+            // 3. Persist
+            const docRef = getDocRef(db, window.appId, userId);
+            try {
+                await setDoc(docRef, {
+                    gems: globalState.gems,
+                    apps: globalState.apps.map(app => ({...app, isTracking: false})), // Save new limits from utility item
+                    purchasedItems: globalState.purchasedItems
+                }, { merge: true });
+                console.log(`Successfully purchased ${itemId}. Gems remaining: ${globalState.gems}`);
+
+                // Re-render both store and app
+                renderApp();
+                showGemStore(); 
+            } catch (error) {
+                console.error("Error saving purchase data:", error);
+                // Revert state if save fails
+                globalState.gems += cost;
+                delete globalState.purchasedItems[itemId];
+                if (type === 'utility' && itemId === 'limit-extension') {
+                     globalState.apps = globalState.apps.map(app => ({
+                        ...app,
+                        limit: app.limit - 10
+                    }));
+                }
+            }
+        }
+        
+
+        // --- FIRESTORE LOGIC ---
+
+        /** Writes the current timeData, gems, and challenge state to Firestore. */
+        async function saveTimeData() {
+            if (!db || !userId) return;
+            
+            getDailyChallenge(); 
+            
+            // Calculate today's total minutes spent
+            const todayTotalSpent = globalState.apps.reduce((sum, app) => sum + app.timeSpent, 0);
+            const todayStr = getTodayDateString();
+            
+            // Update monthly log in state
+            globalState.monthlyLog[todayStr] = todayTotalSpent;
+            
+            const docRef = getDocRef(db, window.appId, userId);
+            try {
+                await setDoc(docRef, { 
+                    apps: globalState.apps.map(app => ({...app, isTracking: false})), // Saves current timeSpent AND custom limits
+                    gems: globalState.gems,
+                    totalGemsAccumulated: globalState.totalGemsAccumulated, // NEW: Persist accumulated gems
+                    currentStreak: globalState.currentStreak, 
+                    lastStreakUpdateDate: globalState.lastStreakUpdateDate, 
+                    challengeState: globalState.challengeState,
+                    monthlyLog: globalState.monthlyLog,
+                    purchasedItems: globalState.purchasedItems, 
+                    achievements: globalState.achievements // NEW: Persist achievements
+                }, { merge: true });
+            } catch (error) {
+                console.error("Error saving time data:", error);
+            }
+        }
+
+        /** Starts the Firestore listener and fetches initial data. */
+        function startFirestoreListener() {
+            if (!db || !userId) {
+                console.error("startFirestoreListener called before DB/User is ready.");
+                return;
+            }
+
+            const docRef = getDocRef(db, window.appId, userId);
+
+            onSnapshot(docRef, async (docSnap) => {
+                let fetchedData = {};
+                
+                if (docSnap.exists()) {
+                    fetchedData = docSnap.data();
+                }
+
+                const fetchedApps = fetchedData.apps || [];
+                globalState.apps = INITIAL_APPS_LIST.map(initialApp => {
+                    const remoteApp = fetchedApps.find(fa => fa.id === initialApp.id);
+                    const localApp = globalState.apps.find(l => l.id === initialApp.id);
+
+                    let mergedApp = {...initialApp};
+                    if (remoteApp) {
+                        // Merge remote timeSpent AND custom limit
+                        mergedApp = {...mergedApp, timeSpent: remoteApp.timeSpent, limit: remoteApp.limit}; 
+                    }
+                    mergedApp.isTracking = localApp ? localApp.isTracking : false; 
+                    return mergedApp;
+                });
+                
+                globalState.gems = fetchedData.gems || 0;
+                globalState.totalGemsAccumulated = fetchedData.totalGemsAccumulated || 0; // NEW: Fetch accumulated gems
+                globalState.currentStreak = fetchedData.currentStreak || 0; 
+                globalState.lastStreakUpdateDate = fetchedData.lastStreakUpdateDate || null; 
+                
+                globalState.challengeState = fetchedData.challengeState || {
+                    dailyChallengeSeed: 0,
+                    lastCompletedDate: null,
+                    lastTipCompletedDate: null
+                };
+
+                globalState.monthlyLog = fetchedData.monthlyLog || {}; 
+                globalState.purchasedItems = fetchedData.purchasedItems || {}; 
+                globalState.achievements = fetchedData.achievements || {}; // NEW: Fetch achievements
+
+                if (!globalState.challengeState.hasOwnProperty('lastTipCompletedDate')) {
+                     globalState.challengeState.lastTipCompletedDate = null;
+                }
+
+                getDailyChallenge();
+
+                if (!docSnap.exists() && isAuthReady) {
+                    await saveTimeData();
+                }
+
+                renderApp();
+                renderMonthlyGraph(); 
+                checkAndAwardAchievements(); // Run check on load to catch missed achievements (e.g., total gems)
+            }, (error) => {
+                console.error("Error listening to Firestore:", error);
+            });
+        }
+
+        // --- TRACKING SIMULATION LOGIC ---
+
+        /** Clears any existing interval and sets a new one for tracking. */
+        function startGlobalTrackingInterval() {
+            if (trackingInterval) {
+                clearInterval(trackingInterval);
+            }
+
+            trackingInterval = setInterval(() => {
+                let changed = false;
+                const trackingApp = globalState.apps.find(app => app.isTracking);
+
+                if (trackingApp) {
+                    trackingApp.timeSpent += 1 / 60; // 1 minute of time spent every 60 seconds (simulated)
+                    changed = true;
+                }
+
+                if (changed) {
+                    renderApp();
+                    // Save every 60 seconds (1 minute update cycle)
+                    if (trackingApp && Math.floor(trackingApp.timeSpent * 60) % 60 === 0) { 
+                        saveTimeData(); 
+                    }
+                }
+            }, 1000); // Check every second
+        }
+
+        /** Toggles tracking for the entire social group (now all four apps). */
+        window.toggleSocialTracking = function() {
+            const socialApps = globalState.apps.filter(a => a.group === 'social');
+            const currentlyTrackingSocial = socialApps.some(a => a.isTracking);
+            
+            // Stop all tracking first
+            globalState.apps.forEach(a => { a.isTracking = false; });
+
+            if (!currentlyTrackingSocial) {
+                // Start tracking the first app in the social group
+                const appToTrack = socialApps[0]; 
+                if (appToTrack) {
+                    appToTrack.isTracking = true;
+                    startGlobalTrackingInterval();
+                }
+            } else {
+                // Stop tracking
+                if (trackingInterval) {
+                    clearInterval(trackingInterval);
+                    trackingInterval = null;
+                }
+            }
+
+            saveTimeData();
+        };
+
+        // --- UI RENDERING HELPERS ---
+
+        /** Function to generate the Flame SVG for the streak icon. */
+        function getFlameIconSvg(streak) {
+            const colorClass = streak > 0 ? 'text-orange-500' : 'text-gray-400/50';
+            const scaleClass = streak >= 5 ? 'scale-110 drop-shadow-lg shadow-orange-500/50' : 'scale-100'; 
+
+            return `
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" 
+                     class="w-7 h-7 transition-all duration-300 ${colorClass} ${scaleClass}" 
+                     fill="currentColor" title="Current Streak: ${streak} Days">
+                    <path d="M12 2C9.48 4.25 8 7.37 8 10.88c0 3.75 2.5 7.12 4 10.12 1.5-3 4-6.37 4-10.12C16 7.37 14.52 4.25 12 2z"/>
+                </svg>
+            `;
+        }
+        
+        // --- CHART RENDERING (UPDATED for Dark Line Graph) ---
+        let monthlyChartInstance = null; // Global reference for Chart.js instance
+
+        function renderMonthlyGraph() {
+            const chartCanvas = document.getElementById('monthlyScreenTimeChart');
+            const headerContainer = document.getElementById('monthlyGraphHeader');
+            if (!chartCanvas || !headerContainer) return;
+
+            // 1. Prepare Data
+            const today = new Date();
+            const currentMonth = today.getMonth();
+            const currentYear = today.getFullYear();
+            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+
+            const labels = Array.from({ length: daysInMonth }, (_, i) => i + 1); // [1, 2, ..., 31]
+            const dataPoints = [];
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateStr = `${currentYear}-${(currentMonth + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+                // Convert minutes to hours (minutes / 60)
+                const totalMinutes = globalState.monthlyLog[dateStr] || 0;
+                dataPoints.push(parseFloat((totalMinutes / 60).toFixed(1))); 
+            }
+            
+            // Calculate total hours for the header
+            const totalHours = dataPoints.reduce((sum, hours) => sum + hours, 0).toFixed(1);
+            
+            // Update the header content
+            headerContainer.innerHTML = `
+                <h2 class="text-xl font-bold text-gray-400 mb-1">Total Screen Time This Month</h2>
+                <p class="text-5xl font-extrabold text-lime-400">${totalHours} Hrs</p>
+                <p class="text-sm text-gray-500 mt-1">Daily trend based on tracked usage.</p>
+            `;
+
+            // Clear previous chart instance if it exists
+            if (window.monthlyChartInstance) {
+                window.monthlyChartInstance.destroy();
+            }
+
+            // 2. Render Chart (Updated for Line Graph & Dark Theme)
+            window.monthlyChartInstance = new Chart(chartCanvas, {
+                type: 'line', // Line graph type
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Screen Time (Hours)',
+                        data: dataPoints,
+                        borderColor: '#a3e635', // Lime-400 for the line
+                        backgroundColor: 'rgba(163, 230, 53, 0.2)', // Subtle fill below the line
+                        borderWidth: 3,
+                        pointRadius: 3,
+                        pointBackgroundColor: '#a3e635',
+                        tension: 0.4, // Smoother line
+                        fill: true, // Fill area below the line
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    color: '#ffffff', // Default text color for chart elements
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Hours',
+                                color: '#d1d5db' // Gray-300
+                            },
+                            ticks: {
+                                color: '#d1d5db' // White ticks
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)', // Subtle white grid
+                                borderColor: '#4b5563' // Gray-600
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Day of the Month',
+                                color: '#d1d5db' // Gray-300
+                            },
+                            ticks: {
+                                color: '#d1d5db' // White ticks
+                            },
+                            grid: {
+                                display: false // No vertical grid lines
+                            },
+                            borderColor: '#4b5563'
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        title: {
+                            display: true,
+                            text: `${new Date(currentYear, currentMonth).toLocaleString('default', { month: 'long' })} ${currentYear} Trend`,
+                            font: { size: 16, weight: 'bold' },
+                            color: '#e5e7eb' // Gray-200
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(31, 41, 55, 0.9)', // Dark background for tooltip
+                            titleColor: '#ffffff',
+                            bodyColor: '#e5e7eb',
+                            borderColor: '#a3e635',
+                            borderWidth: 1
+                        }
+                    }
+                }
+            });
+        }
+        
+        // --- UI RENDERING ---
+
+        /** Renders the main application interface. */
+        function renderApp() {
+            const appList = document.getElementById('appList');
+            const summaryContainer = document.getElementById('summaryCard'); 
+            const gemDisplay = document.getElementById('gemDisplay');
+            const streakDisplay = document.getElementById('streakDisplay'); 
+            const dailyTipCard = document.getElementById('dailyTipCard'); 
+            const dailyChallengeCard = document.getElementById('dailyChallengeCard');
+            const achievementButton = document.getElementById('achievementButton'); // New
+
+            if (!appList || !summaryContainer || !gemDisplay || !streakDisplay || !dailyTipCard || !dailyChallengeCard || !achievementButton) return;
+            
+            // --- 1. AGGREGATE DATA ---
+            const allSocialApps = globalState.apps.filter(a => a.group === 'social');
+
+            let totalSpent = 0;
+            let totalLimit = 0;
+            let groupTracking = false;
+            let trackingAppName = null;
+            
+            allSocialApps.forEach(app => {
+                totalSpent += app.timeSpent;
+                totalLimit += app.limit; // Uses the potentially customized limit
+                if (app.isTracking) {
+                    groupTracking = true;
+                    trackingAppName = app.name;
+                }
+            });
+
+            const totalTimeSpent = totalSpent;
+            
+            // --- 1.5. CALCULATE REWARD ENTERTAINMENT TIME ---
+            let earnedMinutes = 0;
+            const earnedGemsStr = globalState.gems.toString();
+            if (earnedGemsStr.length > 1) {
+                earnedMinutes = parseInt(earnedGemsStr.slice(0, -1), 10);
+            }
+
+            // --- 1.6. CALCULATE MEDIA BALANCE SCORE ---
+            const todayStr = getTodayDateString();
+            const isChallengeCompleted = globalState.challengeState.lastCompletedDate === todayStr;
+            const isTipCompleted = globalState.challengeState.lastTipCompletedDate === todayStr; 
+
+            let complianceScore = 0; 
+            const maxLimit = totalLimit; 
+
+            if (maxLimit > 0) {
+                if (totalTimeSpent <= maxLimit) {
+                    complianceScore = 50;
+                } else {
+                    const overshoot = totalTimeSpent - maxLimit;
+                    const penaltyRatio = Math.min(overshoot / maxLimit, 1.0); 
+                    complianceScore = Math.max(0, 50 - (penaltyRatio * 50));
+                }
+            } else {
+                // If max limit is 0 (unlikely but safe), compliance is 50 if spent is 0, else 0
+                 complianceScore = totalTimeSpent > 0 ? 0 : 50;
+            }
+
+            let proactivenessScore = 0;
+            if (isChallengeCompleted) {
+                proactivenessScore += 25;
+            }
+            if (isTipCompleted) {
+                proactivenessScore += 25;
+            }
+
+            const mediaBalanceScore = Math.round(complianceScore + proactivenessScore); 
+            
+            // Ensure achievements are checked after score calculation (for compliance_score_90 badge)
+            checkAndAwardAchievements();
+
+            // --- 2. RENDER HEADER COUNTS ---
+            gemDisplay.innerHTML = `
+                <div class="flex items-center space-x-2 p-2 bg-white rounded-lg shadow-md border border-sky-200">
+                    <svg class="w-6 h-6 text-sky-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M10 0 L20 10 L10 20 L0 10 Z"></path>
+                    </svg>
+                    <span class="text-xl font-bold text-sky-600">${globalState.gems} Gems</span>
+                </div>
+            `;
+            
+            const streakStatusText = globalState.currentStreak > 0 
+                ? `${globalState.currentStreak} Day Streak` 
+                : 'No Active Streak';
+            const streakStatusColor = globalState.currentStreak > 0 ? 'text-orange-600' : 'text-gray-500';
+
+            streakDisplay.innerHTML = `
+                <div class="flex items-center space-x-2 p-2 bg-white rounded-lg shadow-md border border-orange-200">
+                    ${getFlameIconSvg(globalState.currentStreak)}
+                    <span class="text-xl font-bold ${streakStatusColor}">${streakStatusText}</span>
+                </div>
+            `;
+
+            // New: Achievement button display
+            const unlockedCount = Object.keys(globalState.achievements).length;
+            achievementButton.innerHTML = `
+                <button onclick="showAllAchievements()" class="flex items-center space-x-2 p-2 bg-purple-500 rounded-lg shadow-md border border-purple-700 hover:bg-purple-600 transition duration-150 transform active:scale-95">
+                    <span class="text-base font-bold text-white leading-none">${unlockedCount}</span>
+                    <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 14H8v-2h3v2zm4-4h-4V8h4v3z"/>
+                    </svg>
+                    <span class="text-xl font-bold text-white">Badges</span>
+                </button>
+            `;
+            
+            // --- 3. RENDER SUMMARY / MEDIA BALANCE SCORE (COLUMN 1 - TOP) ---
+            const totalRemaining = Math.max(0, totalLimit - totalTimeSpent);
+            const totalProgress = getProgress(totalTimeSpent, totalLimit);
+            const totalStatusColor = totalTimeSpent > totalLimit && totalLimit > 0 ? 'bg-orange-500' : 'bg-lime-500';
+
+            summaryContainer.innerHTML = `
+                <div class="bg-blue-800 p-6 rounded-xl text-white shadow-xl h-full">
+                    <div class="flex justify-between items-center mb-4 border-b border-blue-700 pb-2">
+                        <h2 class="text-3xl font-extrabold">Media Balance Score</h2>
+                        <!-- New Limit Customization Button -->
+                        <button onclick="showLimitModal()" class="text-sm font-semibold text-blue-300 hover:text-blue-200 transition duration-150 flex items-center">
+                            <svg class="w-5 h-5 inline-block -mt-0.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37a1.724 1.724 0 002.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                            Edit Limits
+                        </button>
+                    </div>
+                    
+                    <div class="flex items-center justify-center space-x-4 mb-6">
+                        <div class="relative w-28 h-28">
+                            <svg class="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                                <circle class="text-blue-700" stroke-width="8" stroke="currentColor" fill="transparent" r="46" cx="50" cy="50"/>
+                                <circle class="progress-ring__circle text-pink-300"
+                                        stroke-width="8"
+                                        stroke="currentColor"
+                                        fill="transparent"
+                                        r="46"
+                                        cx="50"
+                                        cy="50"
+                                        style="stroke-dasharray: 289.02; stroke-dashoffset: ${289.02 - (mediaBalanceScore * 2.8902)};"/>
+                            </svg>
+                            <span class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-5xl font-black text-pink-300">${mediaBalanceScore}</span>
+                        </div>
+                        <div class="text-left">
+                            <p class="text-sm uppercase text-blue-300">Your Daily Rating</p>
+                            <span class="text-2xl font-bold">${mediaBalanceScore >= 80 ? 'Excellent!' : mediaBalanceScore >= 50 ? 'Good Progress' : 'Needs Focus'}</span>
+                            <p class="text-xs text-blue-400 mt-1">Compliance & Goal completion.</p>
+                        </div>
+                    </div>
+
+                    <h2 class="text-xl font-extrabold mb-4 border-b border-blue-700 pb-2">Tracking Metrics</h2>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="flex flex-col">
+                            <span class="text-xs uppercase text-blue-300">Total Spent</span>
+                            <span class="text-2xl font-bold">${formatTime(totalTimeSpent)}</span>
+                        </div>
+                        <div class="flex flex-col">
+                            <span class="text-xs uppercase text-blue-300">Total Limit</span>
+                            <span class="text-2xl font-bold">${totalLimit} min</span>
+                        </div>
+                        <div class="col-span-2 flex flex-col">
+                            <span class="text-xs uppercase text-blue-300">Time Remaining</span>
+                            <span class="text-2xl font-bold text-lime-300">${formatTime(totalRemaining)}</span>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 pt-4 border-t border-blue-700">
+                        <span class="text-xs uppercase text-blue-300">Reward Entertainment Time</span>
+                        <span class="text-3xl font-extrabold text-pink-300">${formatTime(earnedMinutes)}</span>
+                        <p class="text-xs text-blue-400 mt-1">Calculated from ${globalState.gems} gems (Total Earned: ${globalState.totalGemsAccumulated}).</p>
+                    </div>
+
+                    <div class="mt-4">
+                        <span class="text-sm font-medium">Overall Progress (${Math.round(totalProgress)}%)</span>
+                        <div class="w-full bg-blue-700 rounded-full h-3 mt-1">
+                            <div class="h-3 rounded-full ${totalStatusColor}" style="width: ${totalProgress}%"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+
+            // --- 4. RENDER DAILY FOCUS (COLUMN 2 - TOP) ---
+            
+            // Wellness Tip Card
+            const tipText = getDailyTip(globalState.challengeState.dailyChallengeSeed);
+            
+            dailyTipCard.innerHTML = `
+                <div class="bg-indigo-100 p-5 rounded-xl border-2 border-indigo-400 shadow-lg">
+                    <h3 class="text-xl font-extrabold text-indigo-800 mb-3 flex items-center">
+                        <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        Wellness Tip of the Day
+                    </h3>
+                    <p class="text-gray-700 font-medium italic">${tipText}</p>
+
+                    <div class="flex justify-between items-center pt-3 mt-4 border-t border-indigo-200">
+                         <div class="text-lg font-bold text-indigo-600 flex items-center">
+                             <span class="text-2xl mr-1">+${TIP_REWARD}</span> Gems
+                        </div>
+
+                        <button onclick="completeWellnessTip()" 
+                                ${isTipCompleted ? 'disabled' : ''}
+                                class="py-2 px-4 rounded-lg font-bold text-sm text-white transform active:scale-95 transition duration-150 shadow-md 
+                                ${isTipCompleted 
+                                    ? 'bg-indigo-600 cursor-not-allowed opacity-70' 
+                                    : 'bg-indigo-500 hover:bg-indigo-600'}">
+                            ${isTipCompleted ? 'CLAIMED TODAY' : 'I FOLLOWED THE TIP'}
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            // Daily Challenge Card
+            const challenge = getDailyChallenge();
+            const challengeStatusColor = challenge.isCompleted ? 'text-lime-500' : 'text-orange-500';
+            const challengeStatusIcon = challenge.isCompleted 
+                ? `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`
+                : `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>`;
+
+            dailyChallengeCard.innerHTML = `
+                <div class="bg-blue-100 p-5 rounded-xl border-2 ${challenge.isCompleted ? 'border-lime-500' : 'border-orange-500'} shadow-lg">
+                    <h3 class="text-xl font-extrabold text-blue-900 mb-2 flex items-center justify-between">
+                        <span>Daily Challenge</span>
+                        <span class="text-base font-semibold text-gray-600 flex items-center">
+                            <span class="text-xl mr-1 ${challenge.themeColor}">${challenge.themeIcon}</span>
+                            ${challenge.themeName}
+                        </span>
+                    </h3>
+                    <p class="text-gray-700 font-medium mb-4 italic border-t border-blue-200 pt-2">${challenge.text}</p>
+                    
+                    <div class="flex justify-between items-center pt-3 border-t border-blue-200">
+                        <div class="text-lg font-bold text-orange-600 flex items-center">
+                             <span class="text-2xl mr-1">+${challenge.reward}</span> Gems
+                        </div>
+
+                        <button onclick="completeDailyChallenge()" 
+                                ${challenge.isCompleted ? 'disabled' : ''}
+                                class="py-2 px-4 rounded-lg font-bold text-sm text-white transform active:scale-95 transition duration-150 shadow-md 
+                                ${challenge.isCompleted 
+                                    ? 'bg-lime-600 cursor-not-allowed opacity-70' 
+                                    : 'bg-orange-500 hover:bg-orange-600'}">
+                            ${challenge.isCompleted ? 'COMPLETED TODAY' : 'CLAIM REWARD'}
+                        </button>
+                    </div>
+                </div>
+            `;
+
+
+            // --- 5. RENDER APP LIST (COLUMN 2 - BOTTOM) ---
+
+            const aggregatedApps = [];
+            aggregatedApps.push({
+                id: 'social',
+                name: 'App Usage Tracker',
+                limit: totalLimit,
+                timeSpent: totalSpent,
+                color: 'bg-blue-400', 
+                isTracking: groupTracking,
+                subApps: allSocialApps 
+            });
+
+            appList.innerHTML = `
+                <h2 class="text-2xl font-bold text-gray-800">Tracking Control</h2>
+                ${aggregatedApps.map(item => {
+                    const progress = getProgress(item.timeSpent, item.limit);
+                    const isOverLimit = item.timeSpent > item.limit && item.limit > 0;
+                    const trackingStyle = item.isTracking ? 'border-2 border-lime-500 shadow-lg shadow-lime-500/50' : 'shadow-md hover:shadow-lg transition-shadow';
+                    const buttonText = item.isTracking ? 'STOP TRACKING' : 'START TRACKING';
+                    const buttonColor = item.isTracking ? 'bg-orange-500 hover:bg-orange-600' : 'bg-lime-500 hover:bg-lime-600';
+                    
+                    const toggleFunction = 'toggleSocialTracking()';
+
+                    const trackingFocusDetail = `
+                        <div class="mt-4 pt-3 border-t border-gray-200">
+                            <p class="text-xs text-gray-500 italic">Simulating tracking for: <span class="font-bold">${item.isTracking ? trackingAppName : 'None'}</span></p>
+                            <p id="userIdDisplay" class="text-xs mt-1 text-blue-400">User ID: ${userId || '...loading'}</p>
+                        </div>
+                    `;
+
+                    return `
+                        <div class="p-6 bg-white rounded-xl ${trackingStyle} flex flex-col items-center justify-between space-y-4">
+                            <div class="flex-grow w-full">
+                                <div class="flex justify-between items-start mb-2">
+                                    <h3 class="text-2xl font-bold text-gray-800 flex items-center">
+                                        <span class="w-3 h-3 rounded-full ${item.color} mr-2"></span>
+                                        ${item.name}
+                                    </h3>
+                                </div>
+                                
+                                <div class="flex justify-between text-base font-semibold mb-2">
+                                    <p class="${isOverLimit ? 'text-orange-600' : 'text-gray-700'}">
+                                        Spent: ${formatTime(item.timeSpent)}
+                                    </p>
+                                    <p class="text-gray-500">
+                                        Limit: ${item.limit > 0 ? `${item.limit} min` : 'No Limit'}
+                                    </p>
+                                </div>
+
+                                <div class="w-full bg-gray-200 rounded-full h-3">
+                                    <div class="h-3 rounded-full ${isOverLimit ? 'bg-orange-500' : 'bg-lime-500'}" style="width: ${progress}%"></div>
+                                </div>
+                                ${isOverLimit ? `<p class="text-sm text-orange-500 mt-2 font-medium">Group limit exceeded! Time to log off.</p>` : ''}
+                                
+                                ${trackingFocusDetail}
+
+                            </div>
+                            
+                            <button onclick="${toggleFunction}"
+                                    class="w-full py-3 px-6 rounded-lg font-bold text-white uppercase text-sm ${buttonColor} transform active:scale-95 transition duration-150 shadow-lg">
+                                ${buttonText}
+                            </button>
+                        </div>
+                    `;
+                }).join('')}
+            `;
+        }
+
+
+        // --- FIREBASE INITIALIZATION ---
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        /** Initializes Firebase Auth and sets userId sequentially. */
+        async function initializeAppAndAuth() {
+            try {
+                if (initialAuthToken) {
+                    const userCredential = await signInWithCustomToken(auth, initialAuthToken);
+                    userId = userCredential.user.uid;
+                } else {
+                    const userCredential = await signInAnonymously(auth);
+                    userId = userCredential.user.uid;
+                }
+            } catch (error) {
+                console.error("Initial sign-in failed:", error);
+                // Fallback for demo/unauthenticated path if all else fails
+                userId = crypto.randomUUID(); 
+            }
+
+            isAuthReady = true;
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('appContainer').classList.remove('hidden');
+
+            // Now that userId is set, start the listener
+            startFirestoreListener();
+            // Start the tracking interval simulation
+            startGlobalTrackingInterval();
+            showWelcomeModalIfNeeded(); // Show welcome modal after auth is ready
+        }
+
+
+        window.onload = function() {
+            if (firebaseConfig) {
+                document.getElementById('loading').classList.remove('hidden');
+                document.getElementById('appContainer').classList.add('hidden');
+                
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                onAuthStateChanged(auth, (user) => {
+                    if (isAuthReady && user && user.uid !== userId) {
+                         console.log("Auth state changed externally, updating userId.");
+                         userId = user.uid;
+                         // Restart listener to pull new user's data
+                         startFirestoreListener(); 
+                         renderApp();
+                    }
+                });
+
+                initializeAppAndAuth(); 
+
+            } else {
+                console.error("Firebase configuration is missing. Running in demo mode.");
+                userId = 'demo-user';
+                getDailyChallenge(); 
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('appContainer').classList.remove('hidden');
+                startGlobalTrackingInterval();
+                renderApp();
+                renderMonthlyGraph();
+                showWelcomeModalIfNeeded(); // Show welcome modal in demo mode
+                checkAndAwardAchievements(); // Run check on load in demo mode
+            }
+        };
+
+    </script>
+</head>
+<body class="min-h-screen p-4">
+    
+    <!-- Welcome Modal -->
+    <div id="welcomeModal" class="fixed inset-0 z-50 bg-gray-900 bg-opacity-70 flex items-center justify-center p-4 transition-opacity duration-300 hidden">
+        <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full transform scale-100 transition-transform duration-300">
+            <h2 class="text-3xl font-extrabold text-blue-600 mb-4 flex items-center">
+                <svg class="w-8 h-8 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                Welcome to Your Balance Journey!
+            </h2>
+            <p class="text-gray-700 mb-4 leading-relaxed">
+                Hey there! We're so excited you're here to take control of your **media choices**. This app is all about building smarter habits—not shame.
+            </p>
+            <p class="text-gray-700 mb-6 font-semibold">
+                Use the tracker to log time on social apps, hit your daily challenges, and earn gems for mindful engagement. Let's make every minute count!
+            </p>
+            <button onclick="dismissWelcome()" class="w-full py-3 bg-blue-500 text-white font-bold rounded-xl shadow-md hover:bg-blue-600 transition duration-150 transform active:scale-95">
+                Start My Mindful Tracking!
+            </button>
+        </div>
+    </div>
+
+    <!-- Achievement Unlocked Modal (NEW) -->
+    <div id="achievementModal" class="fixed inset-0 z-50 bg-gray-900 bg-opacity-70 flex items-center justify-center p-4 transition-opacity duration-300 hidden">
+        <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full transform scale-100 transition-transform duration-300">
+            <div id="achievementModalContent">
+                <!-- Content generated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- All Achievements Modal (NEW) -->
+    <div id="allAchievementsModal" class="fixed inset-0 z-50 bg-gray-900 bg-opacity-70 flex items-center justify-center p-4 transition-opacity duration-300 hidden">
+        <div class="bg-sky-50 rounded-2xl shadow-2xl p-8 max-w-xl w-full transform scale-100 transition-transform duration-300 overflow-y-auto max-h-[90vh]">
+            <div id="allAchievementsModalContent">
+                <!-- Content generated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading State --><div id="loading" class="flex items-center justify-center min-h-screen text-xl font-semibold text-gray-600 hidden">
+        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        Connecting to persistent storage...
+    </div>
+
+    <!-- Limit Customization Modal -->
+    <div id="limitModal" class="fixed inset-0 z-40 bg-gray-900 bg-opacity-70 flex items-center justify-center p-4 transition-opacity duration-300 hidden">
+        <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-xl w-full transform scale-100 transition-transform duration-300">
+            <div id="limitModalContent">
+                <!-- Content generated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Gem Store Modal -->
+    <div id="storeModal" class="fixed inset-0 z-40 bg-gray-900 bg-opacity-70 flex items-center justify-center p-4 transition-opacity duration-300 hidden">
+        <div class="bg-sky-50 rounded-2xl shadow-2xl p-8 max-w-xl w-full transform scale-100 transition-transform duration-300">
+            <div id="storeModalContent">
+                <!-- Content generated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application Container --><div id="appContainer" class="max-w-4xl mx-auto">
+        <header class="text-center mb-10">
+            <!-- New Header Bar for Gems and Streaks -->
+            <div class="flex justify-center space-x-4 mb-4">
+                <div id="gemDisplay"></div>
+                <div id="streakDisplay"></div>
+                 <!-- Gem Store Button -->
+                <button onclick="showGemStore()" class="flex items-center space-x-2 p-2 bg-pink-500 rounded-lg shadow-md border border-pink-700 hover:bg-pink-600 transition duration-150 transform active:scale-95">
+                    <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                    <span class="text-xl font-bold text-white">Store</span>
+                </button>
+                <!-- Achievement Button (NEW) -->
+                 <div id="achievementButton"></div>
+            </div>
+            
+            <h1 class="text-5xl font-extrabold text-gray-900 mb-2">Smart Media Choices</h1>
+            <p class="text-xl text-gray-600">Gamified balance tracker for mindful social media usage.</p>
+            <p class="text-lg font-semibold italic text-blue-500 mt-2">Think. Choose. Balance.</p>
+        </header>
+        
+        <main class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            
+            <!-- COLUMN 1: Summary / Monthly Graph -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- Media Balance Score and Metrics rendered here by JS -->
+                <div id="summaryCard"></div>
+                
+                <!-- UPDATED: Monthly Graph Card with Dark Theme and Line Chart -->
+                <div class="bg-gray-900 p-6 rounded-xl shadow-xl border border-gray-700 text-white" style="height: 400px;">
+                    <div id="monthlyGraphHeader" class="mb-4">
+                        <!-- Dynamic header text will be rendered here -->
+                        <h2 class="text-xl font-bold text-gray-400 mb-1">Total Screen Time This Month</h2>
+                        <p class="text-5xl font-extrabold text-lime-400">0.0 Hrs</p>
+                        <p class="text-sm text-gray-500 mt-1">Daily trend based on tracked usage.</p>
+                    </div>
+                    <div style="height: 250px;">
+                        <canvas id="monthlyScreenTimeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- COLUMN 2: Daily Focus & Tracking Control -->
+            <div class="lg:col-span-1 space-y-6">
+                <h2 class="text-2xl font-bold text-gray-800">Daily Focus</h2>
+                
+                <!-- Daily Tip Card -->
+                <div id="dailyTipCard"></div>
+                
+                <!-- Daily Challenge Card -->
+                <div id="dailyChallengeCard"></div>
+                
+                <!-- App Usage & Tracking Control -->
+                <div id="appList" class="space-y-6">
+                    <!-- Tracking controls rendered here by JS -->
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+</body>
+</html>
