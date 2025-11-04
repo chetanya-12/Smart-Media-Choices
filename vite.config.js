@@ -4,16 +4,8 @@ import react from '@vitejs/plugin-react-swc'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  build: {
-    rollupOptions: {
-      // Explicitly mark Firebase modules as external to prevent Netlify build failure.
-      // This is a crucial step when bundling React/Vite with Firebase SDK v9+ imports.
-      external: [
-        'firebase/app',
-        'firebase/auth',
-        'firebase/firestore',
-        'firebase/storage'
-      ],
-    },
-  },
+  // 1. Sets the base path to relative (./) for Netlify deployment
+  base: './', 
+  // 2. IMPORTANT: We are explicitly NOT including the 'build.rollupOptions' block anymore. 
+  // This ensures the browser can find and load the Firebase modules, fixing the crash.
 })
